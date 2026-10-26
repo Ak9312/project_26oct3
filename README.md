@@ -1,0 +1,42 @@
+# BriefRadar
+
+AI SEO brief generator + AI search tracker.
+
+- **Brief generator** (`/`): keyword in, content brief out — search intent, heading outline, questions to answer, related keywords. Built from real Google data (autocomplete, People Also Ask, related searches) via SerpApi's free plan, written up by an LLM.
+- **AI search tracker** (`/tracker`): sends your prompts to ChatGPT, Perplexity, Gemini and Claude through their APIs and checks whether your brand (and competitors) are named. Runs on demand, and weekly via Vercel Cron.
+- **Google Sheets** (optional): every brief and tracker run is appended to your sheet.
+
+Stack: Next.js (App Router) on Vercel. The API routes are the backend, so there's no separate server.
+
+## Honest limits
+
+- Search volume and keyword difficulty aren't included — no free source provides them. Add Semrush or DataForSEO later if you need them.
+- API answers are a close proxy for what people see in the ChatGPT/Perplexity/Gemini apps, not an exact copy (no personalisation, different search behaviour). Treat the tracker as a week-over-week trend.
+- "Position" is your brand's order among the tracked names that appear in an answer.
+
+## Setup
+
+1. Deploy to Vercel (import this repo).
+2. In **Project → Settings → Environment Variables**, add the variables from [`.env.example`](.env.example). Minimum for briefs: `SERPAPI_KEY` + one LLM key. Redeploy after adding them.
+3. Set `APP_PASSWORD` so strangers can't spend your quota, then enter it once in the site's Connections panel.
+
+### Weekly tracker
+
+Set `CRON_SECRET`, `TRACK_BRAND`, `TRACK_COMPETITORS` and `TRACK_PROMPTS` (prompts separated by `|`). Vercel calls `/api/cron/track` every Monday at 03:00 UTC (08:30 IST). Each run handles up to 10 prompts.
+
+### Google Sheets
+
+1. Create a Google Cloud service account and a JSON key; enable the Google Sheets API.
+2. Create a sheet with two tabs: `Briefs` and `Tracker`. Share it with the service account email as **Editor**.
+3. Set `GOOGLE_SHEET_ID` (from the sheet URL), `GOOGLE_SERVICE_ACCOUNT_EMAIL` and `GOOGLE_PRIVATE_KEY`.
+
+Column order — **Briefs**: created at, keyword, country, content type, intent, H1, outline, questions, related keywords, word count.
+**Tracker**: run at, week, brand, prompt, engine, mentioned, position, competitors named, cited URLs, error.
+
+## Local development
+
+```bash
+npm install
+cp .env.example .env.local   # fill in keys
+npm run dev
+```
