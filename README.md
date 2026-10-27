@@ -2,7 +2,11 @@
 
 AI SEO brief generator + AI search tracker.
 
-- **Brief generator** (`/`): keyword in, content brief out — search intent, heading outline, questions to answer, related keywords. Built from real Google data (autocomplete, People Also Ask, related searches) via SerpApi's free plan, written up by an LLM.
+- **Public link** (`/`): anyone can generate briefs, limited to `PUBLIC_DAILY_LIMIT` (default 5) per visitor per day.
+- **Admin link** (`/admin`): sign in with `APP_PASSWORD` for unlimited briefs, the AI visibility dashboard and settings with share links.
+- Built with Next.js, Tailwind CSS, shadcn-style components, Lucide icons and the Geist font.
+
+- **Brief generator**: keyword in, content brief out — search intent, heading outline, questions to answer, related keywords. Built from real Google data (autocomplete, People Also Ask, related searches) via SerpApi's free plan, written up by an LLM.
 - **AI search tracker** (`/tracker`): sends your prompts to ChatGPT, Perplexity, Gemini and Claude through their APIs and checks whether your brand (and competitors) are named. Runs on demand, and weekly via Vercel Cron.
 - **Google Sheets** (optional): every brief and tracker run is appended to your sheet.
 

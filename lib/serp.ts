@@ -19,7 +19,7 @@ async function serp(params: Record<string, string>): Promise<any> {
     });
   } catch (e) {
     if (e instanceof Error && e.name === "TimeoutError") throw new Error("SerpApi took too long to answer. Try again.");
-    throw e;
+    throw new Error("Couldn't reach SerpApi. Try again in a moment.");
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.error) {

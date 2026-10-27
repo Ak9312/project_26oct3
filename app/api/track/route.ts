@@ -1,4 +1,4 @@
-import { checkPassword } from "@/lib/guard";
+import { isAdminRequest } from "@/lib/auth";
 import { ENGINES, type EngineId } from "@/lib/llm";
 import { splitList } from "@/lib/mentions";
 import { runTracker, trackerHistory } from "@/lib/track";
@@ -7,10 +7,10 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const VALID = new Set(ENGINES.map((e) => e.id));
+const adminOnly = () => Response.json({ error: "Admin only. Sign in at /admin." }, { status: 401 });
 
 export async function POST(req: Request) {
-  const denied = checkPassword(req);
-  if (denied) return denied;
+  if (!isAdminRequest(req)) return adminOnly();
 
   const body = await req.json().catch(() => ({}));
   const engines = (Array.isArray(body.engines) ? body.engines : []).filter((e: string) =>
@@ -33,8 +33,7 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
-  const denied = checkPassword(req);
-  if (denied) return denied;
+  if (!isAdminRequest(req)) return adminOnly();
   const brand = new URL(req.url).searchParams.get("brand") || process.env.TRACK_BRAND || "";
   try {
     return Response.json({ history: await trackerHistory(brand) });
