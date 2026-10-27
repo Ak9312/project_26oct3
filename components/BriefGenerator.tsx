@@ -96,7 +96,7 @@ export default function BriefGenerator({ mode }: { mode: "public" | "admin" }) {
                 setKeyword(e.target.value);
                 setError("");
               }}
-              placeholder="best crm for small business"
+              placeholder="Please enter keywords"
               maxLength={120}
               autoComplete="off"
               className="h-12 min-w-0 flex-1 bg-transparent text-base text-zinc-950 placeholder:text-zinc-400 focus:outline-none"
