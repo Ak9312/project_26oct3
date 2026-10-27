@@ -6,7 +6,7 @@ function Pill({ on, onText = "Connected", offText = "Not set" }: { on: boolean; 
   return <span className={`pill ${on ? "pill-ok" : "pill-warn"}`}>{on ? onText : offText}</span>;
 }
 
-const PROVIDER_LABEL: Record<string, string> = { anthropic: "Claude", openai: "OpenAI", gemini: "Gemini" };
+const PROVIDER_LABEL: Record<string, string> = { groq: "Groq", anthropic: "Claude", openai: "OpenAI", gemini: "Gemini" };
 
 export default function Connections({ status }: { status: Status | null }) {
   const [pw, setPw] = useState("");
@@ -30,7 +30,10 @@ export default function Connections({ status }: { status: Status | null }) {
           <span className="conn-name">Brief LLM</span>
           <Pill on={!!status.briefLlm} onText={PROVIDER_LABEL[status.briefLlm || ""] || "Set"} />
         </div>
-        <p className="note">Writes intent, headings and FAQs from the Google data.</p>
+        {status.briefModel && <span className="mono">{status.briefModel}</span>}
+        <p className="note">
+          {status.briefLlm ? "Writes intent, headings and FAQs from the Google data." : "Add GROQ_API_KEY in Vercel, then redeploy."}
+        </p>
       </div>
 
       <div className="conn">

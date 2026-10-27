@@ -11,10 +11,16 @@ async function serp(params: Record<string, string>): Promise<any> {
   const key = process.env.SERPAPI_KEY;
   if (!key) throw new Error("SERPAPI_KEY is not set");
   const qs = new URLSearchParams({ ...params, api_key: key });
-  const res = await fetch(`https://serpapi.com/search.json?${qs}`, {
-    signal: AbortSignal.timeout(30_000),
-    cache: "no-store",
-  });
+  let res: Response;
+  try {
+    res = await fetch(`https://serpapi.com/search.json?${qs}`, {
+      signal: AbortSignal.timeout(15_000),
+      cache: "no-store",
+    });
+  } catch (e) {
+    if (e instanceof Error && e.name === "TimeoutError") throw new Error("SerpApi took too long to answer. Try again.");
+    throw e;
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.error) {
     throw new Error(`SerpApi: ${data.error || `HTTP ${res.status}`}`);
@@ -23,10 +29,14 @@ async function serp(params: Record<string, string>): Promise<any> {
 }
 
 export async function getSerpData(keyword: string, country: string, lang = "en"): Promise<SerpData> {
-  const [auto, google] = await Promise.all([
+  const [a, g] = await Promise.allSettled([
     serp({ engine: "google_autocomplete", q: keyword, gl: country, hl: lang }),
     serp({ engine: "google", q: keyword, gl: country, hl: lang }),
   ]);
+  // One failed call still leaves enough data for a brief; both failing is an error.
+  if (a.status === "rejected" && g.status === "rejected") throw g.reason;
+  const auto = a.status === "fulfilled" ? a.value : {};
+  const google = g.status === "fulfilled" ? g.value : {};
   const uniq = (xs: string[]) => [...new Set(xs.map((s) => s.trim()).filter(Boolean))];
   return {
     autocomplete: uniq((auto.suggestions || []).map((s: any) => s.value || "")).slice(0, 10),

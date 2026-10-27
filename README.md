@@ -17,7 +17,9 @@ Stack: Next.js (App Router) on Vercel. The API routes are the backend, so there'
 ## Setup
 
 1. Deploy to Vercel (import this repo).
-2. In **Project → Settings → Environment Variables**, add the variables from [`.env.example`](.env.example). Minimum for briefs: `SERPAPI_KEY` + one LLM key. Redeploy after adding them.
+2. In **Project → Settings → Environment Variables**, add the variables from [`.env.example`](.env.example). Minimum for briefs: `SERPAPI_KEY` + `GROQ_API_KEY` (free at console.groq.com). Redeploy after adding them.
+
+Briefs are written by Groq (`openai/gpt-oss-120b` by default) when `GROQ_API_KEY` is set. Groq's free tier allows about 1,000 requests and 200,000 tokens a day; one brief uses one request. Groq isn't an AI search product people use, so it isn't one of the tracker's engines.
 3. Set `APP_PASSWORD` so strangers can't spend your quota, then enter it once in the site's Connections panel.
 
 ### Weekly tracker

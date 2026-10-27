@@ -1,4 +1,4 @@
-import { ENGINES, briefProvider } from "@/lib/llm";
+import { ENGINES, briefModel, briefProvider } from "@/lib/llm";
 import { sheetsConfigured } from "@/lib/sheets";
 
 export const dynamic = "force-dynamic";
@@ -8,6 +8,7 @@ export async function GET() {
   return Response.json({
     serpapi: !!process.env.SERPAPI_KEY,
     briefLlm: briefProvider(),
+    briefModel: briefModel(),
     engines: Object.fromEntries(ENGINES.map((e) => [e.id, !!process.env[e.envKey]])),
     sheets: sheetsConfigured(),
     passwordRequired: !!process.env.APP_PASSWORD,
