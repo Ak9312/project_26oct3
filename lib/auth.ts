@@ -85,9 +85,13 @@ export function recordLoginFailure(req: Request): void {
 // Soft limit: a signed cookie plus a per-IP count kept in server memory.
 // It stops casual overuse; the hard ceiling is still your free SerpApi/Groq quota.
 
-export function publicDailyLimit(): number {
-  const n = Number(process.env.PUBLIC_DAILY_LIMIT ?? 5);
-  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 5;
+export type Bucket = "brief" | "article";
+
+export function publicDailyLimit(bucket: Bucket = "brief"): number {
+  const raw = bucket === "article" ? process.env.ARTICLE_DAILY_LIMIT ?? 2 : process.env.PUBLIC_DAILY_LIMIT ?? 5;
+  const fallback = bucket === "article" ? 2 : 5;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -99,30 +103,31 @@ export function clientIp(req: Request): string {
 }
 
 const usage = new Map<string, number>();
+const cookieName = (bucket: Bucket) => (bucket === "article" ? `${QUOTA_COOKIE}_article` : QUOTA_COOKIE);
 
-function cookieCount(req: Request): number {
-  const v = readCookie(req, QUOTA_COOKIE);
+function cookieCount(req: Request, bucket: Bucket): number {
+  const v = readCookie(req, cookieName(bucket));
   if (!v) return 0;
   const parts = v.split(".");
   if (parts.length !== 3) return 0;
   const [day, count, sig] = parts;
-  if (day !== today() || !safeEqual(sig, sign(`${day}.${count}`))) return 0;
+  if (day !== today() || !safeEqual(sig, sign(`${bucket}.${day}.${count}`))) return 0;
   return Number(count) || 0;
 }
 
-export function publicUsage(req: Request) {
-  const key = `${today()}:${clientIp(req)}`;
-  const used = Math.max(usage.get(key) || 0, cookieCount(req));
-  const limit = publicDailyLimit();
+export function publicUsage(req: Request, bucket: Bucket = "brief") {
+  const key = `${bucket}:${today()}:${clientIp(req)}`;
+  const used = Math.max(usage.get(key) || 0, cookieCount(req, bucket));
+  const limit = publicDailyLimit(bucket);
   return { key, used, limit, remaining: Math.max(0, limit - used) };
 }
 
-/** Reserves one brief before the slow work starts, so parallel clicks can't skip the limit. */
-export function reservePublicUse(req: Request): { key: string; used: number } {
-  const u = publicUsage(req);
+/** Reserves one use before the slow work starts, so parallel clicks can't skip the limit. */
+export function reservePublicUse(req: Request, bucket: Bucket = "brief"): { key: string; used: number } {
+  const u = publicUsage(req, bucket);
   if (usage.size > 5000) {
-    const prefix = `${today()}:`;
-    for (const k of usage.keys()) if (!k.startsWith(prefix)) usage.delete(k);
+    const day = today();
+    for (const k of usage.keys()) if (!k.includes(`:${day}:`)) usage.delete(k);
   }
   usage.set(u.key, u.used + 1);
   return { key: u.key, used: u.used + 1 };
@@ -133,7 +138,36 @@ export function releasePublicUse(key: string): void {
   if (n > 0) usage.set(key, n - 1);
 }
 
-export function quotaCookie(used: number): string {
-  const payload = `${today()}.${used}`;
-  return `${QUOTA_COOKIE}=${payload}.${sign(payload)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=172800`;
+export function quotaCookie(used: number, bucket: Bucket = "brief"): string {
+  const day = today();
+  return `${cookieName(bucket)}=${day}.${used}.${sign(`${bucket}.${day}.${used}`)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=172800`;
+}
+
+// ---------- Article tickets ----------
+// The research step issues a short-lived signed ticket; the writing step requires it,
+// so the expensive model call can't be triggered without a counted research run.
+
+const usedTickets = new Map<string, number>();
+
+export function makeTicket(keyword: string): string {
+  const exp = Date.now() + 20 * 60_000;
+  const nonce = Math.random().toString(36).slice(2, 10);
+  const payload = `${exp}.${nonce}.${sha(keyword.trim().toLowerCase()).slice(0, 16)}`;
+  return `${payload}.${sign(`ticket.${payload}`)}`;
+}
+
+export function useTicket(ticket: string, keyword: string): boolean {
+  const parts = String(ticket || "").split(".");
+  if (parts.length !== 4) return false;
+  const [exp, nonce, kw, sig] = parts;
+  const payload = `${exp}.${nonce}.${kw}`;
+  if (!safeEqual(sig, sign(`ticket.${payload}`))) return false;
+  if (Number(exp) < Date.now()) return false;
+  if (kw !== sha(keyword.trim().toLowerCase()).slice(0, 16)) return false;
+  // Best effort single use (per server instance).
+  const uses = usedTickets.get(nonce) || 0;
+  if (uses >= 2) return false;
+  usedTickets.set(nonce, uses + 1);
+  if (usedTickets.size > 5000) usedTickets.clear();
+  return true;
 }
