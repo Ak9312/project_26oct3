@@ -1,7 +1,7 @@
 // Temporary diagnostics. Returns 404 unless SELFTEST_SECRET is set and matches.
 import { timingSafeEqual } from "node:crypto";
 import { research } from "@/lib/sources";
-import { writeArticle } from "@/lib/writer";
+import { rewriteSentences, writeArticle } from "@/lib/writer";
 import { checkOriginality } from "@/lib/originality";
 
 export const dynamic = "force-dynamic";
@@ -47,6 +47,19 @@ export async function GET(req: Request) {
       }
       clearTimeout(timer);
       const orig = checkOriginality(text, r.sources.filter((s) => s.ok));
+      if (orig.flagged.length) {
+        const t2 = Date.now();
+        try {
+          const sentences = orig.flagged.slice(0, 15).map((f) => f.sentence);
+          const rewrites = await rewriteSentences(sentences);
+          let fixedText = text;
+          sentences.forEach((s, i) => { fixedText = fixedText.replace(s, rewrites[i]); });
+          const after = checkOriginality(fixedText, r.sources.filter((s) => s.ok));
+          out.rewrite = { ms: Date.now() - t2, before: orig.flagged.length, after: after.flagged.length, example: { from: sentences[0], to: rewrites[0] } };
+        } catch (e) {
+          out.rewrite = { error: e instanceof Error ? e.message : String(e) };
+        }
+      }
       out.write = {
         ms: Date.now() - t,
         firstTextMs,

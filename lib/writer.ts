@@ -29,7 +29,11 @@ const COUNTRY: Record<string, string> = {
   ae: "the UAE", sg: "Singapore", de: "Germany", fr: "France",
 };
 
-function system(length: number, country: string) {
+// The model reliably overshoots the requested length by ~1.6×, so it is given a smaller target.
+const OVERSHOOT = Number(process.env.ARTICLE_LENGTH_FACTOR || 1.6);
+
+function system(requested: number, country: string) {
+  const length = Math.round(requested / OVERSHOOT);
   return `You are an expert SEO content writer. Write one original, genuinely useful article for the target keyword, using the research pages provided as your sources.
 
 Rules:
@@ -192,6 +196,32 @@ async function* groq(input: WriteInput, signal: AbortSignal): AsyncGenerator<Wri
     },
     signal,
   );
+}
+
+/** Rewrites sentences that are too close to a source. Groq first (fast), OpenRouter as backup. */
+export async function rewriteSentences(sentences: string[]): Promise<string[]> {
+  const system = `You rewrite sentences so they are original. For each input sentence, write a new sentence with the same meaning in clearly different wording and structure.
+Keep any citation markers like [3] and any Markdown symbols (such as ** or a leading "- ") exactly as they appear. Do not add facts.
+Return only JSON: {"rewrites": ["...", "..."]} with exactly one rewrite per input, in the same order.`;
+  const prompt = `Sentences:\n${JSON.stringify(sentences)}`;
+  const { callGroq } = await import("./llm");
+  let raw = "";
+  if (process.env.GROQ_API_KEY) {
+    raw = (await callGroq(prompt, system, true)).text;
+  } else if (process.env.OPENROUTER_API_KEY) {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}` },
+      body: JSON.stringify({ model: OPENROUTER_MODEL(), messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: 4000 }),
+      signal: AbortSignal.timeout(50_000),
+    });
+    raw = (await res.json())?.choices?.[0]?.message?.content || "";
+  } else throw new Error("No model is set up for rewriting.");
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  const out = JSON.parse(raw.slice(start, end + 1))?.rewrites;
+  if (!Array.isArray(out) || out.length !== sentences.length) throw new Error("The rewrite came back in the wrong shape.");
+  return out.map((s: unknown, i: number) => (typeof s === "string" && s.trim() ? s.trim() : sentences[i]));
 }
 
 /** Runs the writer with fallback. Text deltas are never mixed between providers. */

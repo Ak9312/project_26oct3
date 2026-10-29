@@ -30,6 +30,8 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
   const [startedAt, setStartedAt] = useState(0);
   const [now, setNow] = useState(0);
   const [usage, setUsage] = useState<{ limit: number; remaining: number } | null>(null);
+  const [fixing, setFixing] = useState(false);
+  const [fixed, setFixed] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const topRef = useRef<HTMLDivElement>(null);
 
@@ -56,6 +58,8 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
     setNote("");
     setText("");
     setTruncated(false);
+    setFixed(0);
+    setFixing(false);
     setResearch(null);
     setModel("");
     setStartedAt(Date.now());
@@ -136,6 +140,33 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
       if (!got) throw new Error("The writer returned no text. Try again in a minute.");
       if (!finished) setTruncated(true);
       setPhase("done");
+
+      // Automatically rewrite any sentence that is too close to a source, then re-check.
+      const first = checkOriginality(got, r.sources.filter((s) => s.ok));
+      if (first.flagged.length > 0) {
+        setFixing(true);
+        try {
+          const sentences = first.flagged.slice(0, 15).map((f) => f.sentence);
+          const { rewrites } = await api<{ rewrites: string[] }>("/api/article/rewrite", {
+            method: "POST",
+            body: JSON.stringify({ keyword, ticket: r.ticket, sentences }),
+          });
+          let fixedText = got;
+          let n = 0;
+          sentences.forEach((s, i) => {
+            if (rewrites[i] && rewrites[i] !== s && fixedText.includes(s)) {
+              fixedText = fixedText.replace(s, rewrites[i]);
+              n++;
+            }
+          });
+          setText(fixedText);
+          setFixed(n);
+        } catch {
+          /* keep the flags visible so they can be fixed by hand */
+        } finally {
+          setFixing(false);
+        }
+      }
     } catch (err) {
       if (ctrl.signal.aborted) return;
       setError(err instanceof Error ? err.message : "Writing failed.");
@@ -146,7 +177,7 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
 
   const okSources = research?.sources.filter((s) => s.ok) || [];
   const originality = useMemo(
-    () => (phase === "done" && text ? checkOriginality(text, okSources) : null),
+    () => (phase === "done" && text && !fixing ? checkOriginality(text, okSources) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [phase, text, research],
   );
@@ -210,6 +241,8 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
                   writing={phase === "writing"}
                   truncated={truncated}
                   originality={originality}
+                  fixing={fixing}
+                  fixed={fixed}
                 />
               )}
             </>
@@ -291,9 +324,9 @@ function splitMeta(md: string) {
   return { meta: m?.[1]?.trim() || "", body: m ? md.replace(m[0], "").replace(/\n{3,}/g, "\n\n") : md };
 }
 
-function ArticleView({ keyword, text, sources, writing, truncated, originality }: {
+function ArticleView({ keyword, text, sources, writing, truncated, originality, fixing, fixed }: {
   keyword: string; text: string; sources: Source[]; writing: boolean; truncated: boolean;
-  originality: ReturnType<typeof checkOriginality> | null;
+  originality: ReturnType<typeof checkOriginality> | null; fixing: boolean; fixed: number;
 }) {
   const [copied, setCopied] = useState(false);
   const { meta, body } = splitMeta(text);
@@ -321,11 +354,13 @@ function ArticleView({ keyword, text, sources, writing, truncated, originality }
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 px-6 py-4 sm:px-8">
         <div className="flex flex-wrap items-center gap-2">
           {writing ? <Badge tone="brand"><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />Writing</Badge> : <Badge tone="success">Draft ready</Badge>}
+          {fixing && <Badge tone="brand"><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />Rewriting sentences too close to a source</Badge>}
+          {fixed > 0 && !fixing && <Badge>Rewrote {fixed} sentence{fixed === 1 ? "" : "s"} for originality</Badge>}
           {originality && (originality.flagged.length === 0
             ? <Badge tone="success"><ShieldCheck className="size-3" aria-hidden="true" />Original: no copied sentences</Badge>
             : <Badge tone="warning">{originality.flagged.length} sentence{originality.flagged.length === 1 ? "" : "s"} too close to a source</Badge>)}
         </div>
-        {!writing && (
+        {!writing && !fixing && (
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={copy}>{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{copied ? "Copied" : "Copy"}</Button>
             <Button variant="outline" size="sm" onClick={download}><Download aria-hidden="true" />Download .md</Button>
