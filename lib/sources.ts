@@ -30,7 +30,10 @@ const SKIP_HOSTS = /(^|\.)(youtube\.com|youtu\.be|facebook\.com|instagram\.com|x
 async function serpPage(keyword: string, country: string, start: number): Promise<any> {
   const key = process.env.SERPAPI_KEY;
   if (!key) throw new Error("SERPAPI_KEY is not set");
-  const qs = new URLSearchParams({ engine: "google", q: keyword, gl: country, hl: "en", start: String(start), api_key: key });
+  // Page 1 is requested without "start" so Google includes People Also Ask, as in the brief generator.
+  const params: Record<string, string> = { engine: "google", q: keyword, gl: country, hl: "en", api_key: key };
+  if (start > 0) params.start = String(start);
+  const qs = new URLSearchParams(params);
   let res: Response;
   try {
     res = await fetch(`https://serpapi.com/search.json?${qs}`, { signal: AbortSignal.timeout(20_000), cache: "no-store" });

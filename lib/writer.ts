@@ -46,7 +46,7 @@ Meta description: one sentence, at most 155 characters.
 Then an introduction, ## sections with ### subsections where useful, a "## Frequently asked questions" section with each question as ###, and a short conclusion.
 Do not add a table of contents or a sources list (it is added automatically).
 
-Length: about ${length} words.`;
+Length: ${Math.round(length * 0.9)}–${Math.round(length * 1.1)} words in total. This is a firm limit: plan the sections to fit it, keep each section tight, and finish cleanly within it.`;
 }
 
 const wordsOf = (s: string) => s.split(/\s+/).filter(Boolean);
@@ -161,7 +161,8 @@ async function* openRouter(input: WriteInput, signal: AbortSignal): AsyncGenerat
       { role: "system", content: system(input.length, input.country) },
       { role: "user", content: userPrompt(input, "full") },
     ],
-    max_tokens: 16000,
+    // Room for the article (~1.4 tokens per word) plus some reasoning.
+    max_tokens: Math.round(input.length * 1.4 * 1.3) + 6000,
     temperature: 0.6,
   };
   try {

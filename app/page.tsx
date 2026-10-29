@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
 import { Logo } from "@/components/Logo";
-import BriefGenerator from "@/components/BriefGenerator";
+import PublicTool from "@/components/PublicTool";
 import { buttonVariants } from "@/components/ui/button";
 import { ADMIN_COOKIE, verifyAdminToken } from "@/lib/auth";
 
@@ -27,7 +27,7 @@ export default async function PublicPage() {
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 pb-16 pt-12 sm:px-6 sm:pt-14">
-        <BriefGenerator mode="public" />
+        <PublicTool />
       </main>
 
       <footer className="border-t border-zinc-200 bg-white">

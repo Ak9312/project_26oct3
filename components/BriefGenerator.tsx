@@ -10,7 +10,7 @@ import type { Brief } from "@/lib/brief";
 const TYPES = ["Blog post", "Landing page", "Comparison", "How-to guide", "Product page"];
 type BriefResponse = Brief & { remaining?: number };
 
-export default function BriefGenerator({ mode }: { mode: "public" | "admin" }) {
+export default function BriefGenerator({ mode, embedded = false }: { mode: "public" | "admin"; embedded?: boolean }) {
   const [keyword, setKeyword] = useState("");
   const [country, setCountry] = useState("in");
   const [contentType, setContentType] = useState("Blog post");
@@ -60,7 +60,7 @@ export default function BriefGenerator({ mode }: { mode: "public" | "admin" }) {
 
   return (
     <div className="flex flex-col gap-10">
-      {mode === "public" ? (
+      {embedded ? null : mode === "public" ? (
         <section className="flex flex-col items-center gap-4 text-center">
           <span className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-soft px-3 py-1 text-[13px] font-medium text-brand-ink">
             <span className="size-1.5 rounded-full bg-brand" aria-hidden="true" />

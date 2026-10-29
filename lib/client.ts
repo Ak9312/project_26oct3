@@ -45,6 +45,7 @@ export interface Status {
   sheets?: boolean;
   cron?: { brand: string | null; promptsSet: boolean };
   trackDefaults?: { brand: string; competitors: string; prompts: string[]; engines: string[] };
+  article?: { available: boolean; model: string | null; dailyLimit: number; remaining: number };
 }
 
 export const COUNTRIES: [string, string][] = [
