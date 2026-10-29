@@ -3,6 +3,7 @@
 AI SEO brief generator + AI search tracker.
 
 - **Public link** (`/`): anyone can generate briefs, limited to `PUBLIC_DAILY_LIMIT` (default 5) per visitor per day.
+- **Full article** (`/`, second tab): finds the top 20 Google results (SerpApi, 2 searches), reads each page (respecting robots.txt), and has Nemotron 3 Ultra (free, via OpenRouter) write an original article from them with numbered citations. Every sentence is checked against the sources; any that are too close are rewritten automatically by Groq. Limited to `ARTICLE_DAILY_LIMIT` (default 2) per visitor per day.
 - **Admin link** (`/admin`): sign in with `APP_PASSWORD` for unlimited briefs, the AI visibility dashboard and settings with share links.
 - Built with Next.js, Tailwind CSS, shadcn-style components, Lucide icons and the Geist font.
 
