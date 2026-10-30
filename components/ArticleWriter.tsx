@@ -2,10 +2,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, CircleAlert, Copy, Download, ExternalLink, LoaderCircle, PenLine, Search, ShieldCheck } from "lucide-react";
+import { Bell, BellRing, Check, CircleAlert, Copy, Download, ExternalLink, History, LoaderCircle, PenLine, Search, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, Badge, Card, CardTitle } from "@/components/ui/primitives";
-import { api, COUNTRIES, countryName, type Status } from "@/lib/client";
+import { api, COUNTRIES, countryName, store, type Status } from "@/lib/client";
 import { checkOriginality } from "@/lib/originality";
 import { cn } from "@/lib/utils";
 import type { Research, Source } from "@/lib/sources";
@@ -14,6 +14,47 @@ const TYPES = ["Blog post", "Comparison", "How-to guide", "Landing page"];
 const LENGTHS = [1000, 1500, 2500];
 type Phase = "idle" | "research" | "writing" | "done" | "error";
 type ResearchResponse = Research & { ticket: string; remaining?: number };
+
+// Finished articles are kept in this browser so a refresh or closed tab doesn't lose them.
+const RECENT_KEY = "briefradar.articles";
+const NOTIFY_KEY = "briefradar.notify";
+const MAX_RECENT = 6;
+interface SavedArticle {
+  id: string;
+  keyword: string;
+  country: string;
+  contentType: string;
+  createdAt: string;
+  text: string;
+  model: string;
+  truncated: boolean;
+  fixed: number;
+  flagged: number;
+  checked: number;
+  sources: Source[]; // stored without page text, to save space
+}
+
+function loadRecent(): SavedArticle[] {
+  try {
+    const v = JSON.parse(store(RECENT_KEY) || "[]");
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecent(list: SavedArticle[]) {
+  // localStorage can be full; drop the oldest until it fits.
+  for (let n = list.length; n > 0; n--) {
+    try {
+      localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, n)));
+      return list.slice(0, n);
+    } catch {
+      /* try with fewer */
+    }
+  }
+  return [];
+}
 
 export default function ArticleWriter({ status }: { status: Status | null }) {
   const [keyword, setKeyword] = useState("");
@@ -32,6 +73,11 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
   const [usage, setUsage] = useState<{ limit: number; remaining: number } | null>(null);
   const [fixing, setFixing] = useState(false);
   const [fixed, setFixed] = useState(0);
+  const [recent, setRecent] = useState<SavedArticle[]>([]);
+  const [restored, setRestored] = useState<{ flagged: number; checked: number } | null>(null);
+  const [notify, setNotify] = useState(false);
+  const [notifyBlocked, setNotifyBlocked] = useState(false);
+  const baseTitle = useRef("");
   const abortRef = useRef<AbortController | null>(null);
   const topRef = useRef<HTMLDivElement>(null);
 
@@ -47,6 +93,120 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
+  useEffect(() => {
+    setRecent(loadRecent());
+    const canNotify = "Notification" in window;
+    setNotify(canNotify && store(NOTIFY_KEY) === "1" && Notification.permission === "granted");
+    setNotifyBlocked(canNotify && Notification.permission === "denied");
+  }, []);
+
+  // Show progress in the browser tab title, so it's visible from other tabs.
+  useEffect(() => {
+    if (!baseTitle.current) baseTitle.current = document.title;
+    const words = text.split(/\s+/).filter(Boolean).length;
+    const titles: Record<Phase, string> = {
+      idle: baseTitle.current,
+      research: "Researching… · BriefRadar",
+      writing: words ? `Writing… ${words.toLocaleString()} words · BriefRadar` : "Writing… · BriefRadar",
+      done: "✓ Article ready · BriefRadar",
+      error: "⚠ Article failed · BriefRadar",
+    };
+    document.title = titles[phase];
+  }, [phase, text]);
+
+  // Once you've come back and seen the result, put the normal title back.
+  useEffect(() => {
+    if (phase !== "done" && phase !== "error") return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const restore = () => {
+      if (document.visibilityState === "visible") timer = setTimeout(() => (document.title = baseTitle.current), 4000);
+    };
+    restore();
+    document.addEventListener("visibilitychange", restore);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", restore);
+    };
+  }, [phase]);
+
+  // Ask before closing or refreshing while an article is being written.
+  useEffect(() => {
+    if (phase !== "research" && phase !== "writing" && !fixing) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [phase, fixing]);
+
+  async function toggleNotify() {
+    if (!("Notification" in window)) return;
+    if (notify) {
+      setNotify(false);
+      store(NOTIFY_KEY, "0");
+      return;
+    }
+    const perm = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
+    setNotifyBlocked(perm === "denied");
+    if (perm === "granted") {
+      setNotify(true);
+      store(NOTIFY_KEY, "1");
+    }
+  }
+
+  function announce(title: string, body: string) {
+    if (!notify || !("Notification" in window) || Notification.permission !== "granted") return;
+    if (document.visibilityState === "visible") return;
+    try {
+      const n = new Notification(title, { body, icon: "/apple-icon.png", tag: "briefradar-article" });
+      n.onclick = () => {
+        window.focus();
+        n.close();
+      };
+    } catch {
+      /* some browsers only allow notifications from a service worker */
+    }
+  }
+
+  function remember(finalText: string, r: ResearchResponse, usedModel: string, wasTruncated: boolean, fixedCount: number) {
+    const final = checkOriginality(finalText, r.sources.filter((s) => s.ok));
+    const entry: SavedArticle = {
+      id: Date.now().toString(36),
+      keyword,
+      country,
+      contentType,
+      createdAt: new Date().toISOString(),
+      text: finalText,
+      model: usedModel,
+      truncated: wasTruncated,
+      fixed: fixedCount,
+      flagged: final.flagged.length,
+      checked: final.checked,
+      sources: r.sources.map((s) => ({ ...s, text: "" })),
+    };
+    setRecent(saveRecent([entry, ...loadRecent()].slice(0, MAX_RECENT)));
+  }
+
+  function openSaved(a: SavedArticle) {
+    abortRef.current?.abort();
+    setKeyword(a.keyword);
+    setCountry(a.country);
+    setContentType(a.contentType);
+    setResearch({ keyword: a.keyword, country: a.country, questions: [], relatedSearches: [], sources: a.sources, ticket: "" });
+    setText(a.text);
+    setModel(a.model);
+    setTruncated(a.truncated);
+    setFixed(a.fixed);
+    setFixing(false);
+    setRestored({ flagged: a.flagged, checked: a.checked });
+    setError("");
+    setNote("");
+    setStartedAt(0);
+    setPhase("done");
+    requestAnimationFrame(() => topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
+
   const busy = phase === "research" || phase === "writing";
   const unavailable = status?.article && !status.article.available;
   const outOf = !status?.admin && usage?.remaining === 0;
@@ -60,6 +220,7 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
     setTruncated(false);
     setFixed(0);
     setFixing(false);
+    setRestored(null);
     setResearch(null);
     setModel("");
     setStartedAt(Date.now());
@@ -87,6 +248,8 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     let got = "";
+    let usedModel = "";
+    let wasTruncated = false;
     try {
       const res = await fetch("/api/article/write", {
         method: "POST",
@@ -129,19 +292,30 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
           if (ev.t === "d") {
             got += ev.v;
             setText(got);
-          } else if (ev.t === "model") setModel(ev.provider === "OpenRouter" ? niceModel(ev.name) : `${niceModel(ev.name)} (backup)`);
+          } else if (ev.t === "model") {
+            usedModel = ev.provider === "OpenRouter" ? niceModel(ev.name) : `${niceModel(ev.name)} (backup)`;
+            setModel(usedModel);
+          }
           else if (ev.t === "status" && ev.msg !== "Writing") setNote(ev.msg);
           else if (ev.t === "done") {
             finished = true;
-            if (ev.truncated) setTruncated(true);
+            if (ev.truncated) {
+              wasTruncated = true;
+              setTruncated(true);
+            }
           } else if (ev.t === "error") throw new Error(ev.msg);
         }
       }
       if (!got) throw new Error("The writer returned no text. Try again in a minute.");
-      if (!finished) setTruncated(true);
+      if (!finished) {
+        wasTruncated = true;
+        setTruncated(true);
+      }
       setPhase("done");
 
       // Automatically rewrite any sentence that is too close to a source, then re-check.
+      let finalText = got;
+      let fixedCount = 0;
       const first = checkOriginality(got, r.sources.filter((s) => s.ok));
       if (first.flagged.length > 0) {
         setFixing(true);
@@ -161,15 +335,20 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
           });
           setText(fixedText);
           setFixed(n);
+          finalText = fixedText;
+          fixedCount = n;
         } catch {
           /* keep the flags visible so they can be fixed by hand */
         } finally {
           setFixing(false);
         }
       }
+      remember(finalText, r, usedModel, wasTruncated, fixedCount);
+      announce("Your article is ready", `"${keyword}" · ${finalText.split(/\s+/).filter(Boolean).length.toLocaleString()} words`);
     } catch (err) {
       if (ctrl.signal.aborted) return;
       setError(err instanceof Error ? err.message : "Writing failed.");
+      announce("Article stopped", err instanceof Error ? err.message : "Writing failed.");
       setPhase(got ? "done" : "error");
       if (got) setTruncated(true);
     }
@@ -177,7 +356,7 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
 
   const okSources = research?.sources.filter((s) => s.ok) || [];
   const originality = useMemo(
-    () => (phase === "done" && text && !fixing ? checkOriginality(text, okSources) : null),
+    () => (phase === "done" && text && !fixing && !restored ? checkOriginality(text, okSources) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [phase, text, research],
   );
@@ -221,6 +400,16 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
           {usage && !status?.admin && (
             <span>{usage.remaining > 0 ? `${usage.remaining} of ${usage.limit} free articles left today` : "No free articles left today"}</span>
           )}
+          <button
+            type="button"
+            onClick={toggleNotify}
+            aria-pressed={notify}
+            title={notifyBlocked ? "Notifications are blocked for this site in your browser settings" : undefined}
+            className={cn("inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-md px-2 hover:bg-zinc-100", notify ? "font-medium text-brand-ink" : "text-zinc-600")}
+          >
+            {notify ? <BellRing className="size-3.5" aria-hidden="true" /> : <Bell className="size-3.5" aria-hidden="true" />}
+            {notify ? "Notifying you when ready" : notifyBlocked ? "Notifications blocked" : "Notify me when ready"}
+          </button>
         </div>
         {unavailable && <Alert tone="warning">The article writer isn&apos;t set up yet.</Alert>}
         {error && <Alert>{error}</Alert>}
@@ -243,6 +432,7 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
                   originality={originality}
                   fixing={fixing}
                   fixed={fixed}
+                  restored={restored}
                 />
               )}
             </>
@@ -250,6 +440,7 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
         </div>
         <aside aria-label="Sources" className="flex min-w-0 flex-[1_1_300px] flex-col gap-4">
           {research ? <SourcesPanel sources={research.sources} /> : <HowArticlesWork />}
+          {recent.length > 0 && <RecentArticles items={recent} onOpen={openSaved} busy={busy} />}
         </aside>
       </div>
     </div>
@@ -296,7 +487,7 @@ function Progress({ phase, research, elapsed, model, note, words }: { phase: Pha
     <Card className="flex flex-col gap-3 p-5" aria-live="polite">
       <div className="flex items-center justify-between gap-2">
         <CardTitle>{phase === "done" ? "Article ready" : phase === "error" ? "Something went wrong" : "Working on your article"}</CardTitle>
-        <span className="font-mono text-xs text-zinc-500">{elapsed}s</span>
+        {elapsed > 0 && <span className="font-mono text-xs text-zinc-500">{elapsed}s</span>}
       </div>
       <ol className="flex flex-col gap-2">
         {steps.map((s) => (
@@ -309,7 +500,11 @@ function Progress({ phase, research, elapsed, model, note, words }: { phase: Pha
           </li>
         ))}
       </ol>
-      {phase === "writing" && !words && <p className="text-[13px] text-zinc-500">Writing usually takes 1–3 minutes. Keep this tab open.</p>}
+      {(phase === "research" || phase === "writing") && (
+        <p className="text-[13px] text-zinc-500">
+          Usually 1–3 minutes. You can switch to other tabs or apps; just don&apos;t close or refresh this one. The tab title shows when it&apos;s ready.
+        </p>
+      )}
       {note && <p className="text-[13px] text-amber-800">{note}</p>}
     </Card>
   );
@@ -324,9 +519,10 @@ function splitMeta(md: string) {
   return { meta: m?.[1]?.trim() || "", body: m ? md.replace(m[0], "").replace(/\n{3,}/g, "\n\n") : md };
 }
 
-function ArticleView({ keyword, text, sources, writing, truncated, originality, fixing, fixed }: {
+function ArticleView({ keyword, text, sources, writing, truncated, originality, fixing, fixed, restored }: {
   keyword: string; text: string; sources: Source[]; writing: boolean; truncated: boolean;
   originality: ReturnType<typeof checkOriginality> | null; fixing: boolean; fixed: number;
+  restored: { flagged: number; checked: number } | null;
 }) {
   const [copied, setCopied] = useState(false);
   const { meta, body } = splitMeta(text);
@@ -356,6 +552,9 @@ function ArticleView({ keyword, text, sources, writing, truncated, originality, 
           {writing ? <Badge tone="brand"><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />Writing</Badge> : <Badge tone="success">Draft ready</Badge>}
           {fixing && <Badge tone="brand"><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />Rewriting sentences too close to a source</Badge>}
           {fixed > 0 && !fixing && <Badge>Rewrote {fixed} sentence{fixed === 1 ? "" : "s"} for originality</Badge>}
+          {restored && (restored.flagged === 0
+            ? <Badge tone="success"><ShieldCheck className="size-3" aria-hidden="true" />Original: no copied sentences</Badge>
+            : <Badge tone="warning">{restored.flagged} sentence{restored.flagged === 1 ? "" : "s"} too close to a source</Badge>)}
           {originality && (originality.flagged.length === 0
             ? <Badge tone="success"><ShieldCheck className="size-3" aria-hidden="true" />Original: no copied sentences</Badge>
             : <Badge tone="warning">{originality.flagged.length} sentence{originality.flagged.length === 1 ? "" : "s"} too close to a source</Badge>)}
@@ -425,6 +624,34 @@ const MD: Parameters<typeof ReactMarkdown>[0]["components"] = {
       <a href={href} target="_blank" rel="noreferrer noopener" className="text-brand underline underline-offset-2" {...p}>{children}</a>
     ),
 };
+
+function RecentArticles({ items, onOpen, busy }: { items: SavedArticle[]; onOpen: (a: SavedArticle) => void; busy: boolean }) {
+  return (
+    <Card className="flex flex-col gap-3 p-5">
+      <div className="flex items-center justify-between gap-2">
+        <CardTitle className="inline-flex items-center gap-2"><History className="size-4 text-zinc-500" aria-hidden="true" />Your recent articles</CardTitle>
+        <span className="text-xs text-zinc-500">Saved in this browser</span>
+      </div>
+      <ul className="flex flex-col gap-1">
+        {items.map((a) => (
+          <li key={a.id}>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onOpen(a)}
+              className="flex w-full cursor-pointer flex-col items-start rounded-lg px-2.5 py-2 text-left hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <span className="line-clamp-1 text-sm font-medium">{a.keyword}</span>
+              <span className="text-xs text-zinc-500">
+                {new Date(a.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })} · {a.text.split(/\s+/).filter(Boolean).length.toLocaleString()} words
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
 
 function SourcesPanel({ sources }: { sources: Source[] }) {
   const ok = sources.filter((s) => s.ok);
