@@ -454,7 +454,11 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
 }
 
 const niceModel = (id: string) =>
-  id.includes("nemotron-3-ultra") ? "Nemotron 3 Ultra" : id.replace(/^.*\//, "").replace(/:free$/, "");
+  id.includes("nemotron-3-ultra")
+    ? "Nemotron 3 Ultra"
+    : id.includes("nemotron-3.5-super")
+      ? "Nemotron 3.5 Super"
+      : id.replace(/^.*\//, "").replace(/:free$/, "");
 
 function Field(props: { id: string; label: string; value: string; onChange: (v: string) => void; children: React.ReactNode }) {
   return (

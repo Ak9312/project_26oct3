@@ -92,6 +92,20 @@ ${blocks.join("\n\n---\n\n")}
 Write the article now.`;
 }
 
+type ModelError = Error & { status?: number };
+
+/** Builds a readable error and logs the provider's real reason (visible in Vercel → Logs). */
+function modelError(e: any, status: number | undefined, model: string): ModelError {
+  const meta = e?.metadata || {};
+  const raw = typeof meta.raw === "string" ? meta.raw : meta.raw ? JSON.stringify(meta.raw) : "";
+  const provider = meta.provider_name ? ` (${meta.provider_name})` : "";
+  const detail = raw ? `: ${raw.replace(/\s+/g, " ").slice(0, 160)}` : "";
+  console.error(`[writer] ${model || "model"} failed${provider}`, status ?? "", JSON.stringify(e ?? {}).slice(0, 1500));
+  const err = new Error(`${String(e?.message || `HTTP ${status}`).slice(0, 140)}${provider}${detail}`) as ModelError;
+  err.status = status;
+  return err;
+}
+
 /** Streams an OpenAI-compatible chat completion, yielding reasoning ticks and text deltas. */
 async function* streamChat(
   url: string,
@@ -108,15 +122,13 @@ async function* streamChat(
   });
   if (!res.ok || !res.body) {
     const raw = await res.text().catch(() => "");
-    let msg = raw;
+    let parsed: any = null;
     try {
-      msg = JSON.parse(raw)?.error?.message || raw;
+      parsed = JSON.parse(raw)?.error;
     } catch {
-      /* keep raw */
+      /* not JSON */
     }
-    const err = new Error(String(msg || `HTTP ${res.status}`).slice(0, 300)) as Error & { status?: number };
-    err.status = res.status;
-    throw err;
+    throw modelError(parsed ?? { message: raw }, res.status, String(body.model ?? ""));
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -145,7 +157,7 @@ async function* streamChat(
       } catch {
         continue;
       }
-      if (j.error) throw new Error(String(j.error.message || "The model returned an error.").slice(0, 300));
+      if (j.error) throw modelError(j.error, Number(j.error.code) || undefined, String(body.model ?? ""));
       const delta = j.choices?.[0]?.delta || {};
       if (delta.content) yield { t: "d", v: delta.content };
       else if ((delta.reasoning || delta.reasoning_content) && Date.now() - lastThink > 1500) {
@@ -157,45 +169,73 @@ async function* streamChat(
   }
 }
 
+export const OPENROUTER_FALLBACKS = () =>
+  (process.env.OPENROUTER_FALLBACK_MODELS ?? "nvidia/nemotron-3.5-super-vl:free")
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean);
+
+const niceName = (id: string) =>
+  id.includes("nemotron-3-ultra") ? "Nemotron 3 Ultra" : id.includes("nemotron-3.5-super") ? "Nemotron 3.5 Super" : id.replace(/^.*\//, "").replace(/:free$/, "");
+
 async function* openRouter(input: WriteInput, signal: AbortSignal): AsyncGenerator<WriterEvent> {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) throw new Error("OPENROUTER_API_KEY is not set");
+  const url = "https://openrouter.ai/api/v1/chat/completions";
   const headers = {
     Authorization: `Bearer ${key}`,
     "HTTP-Referer": process.env.SITE_URL || "https://project-26oct3.vercel.app",
     "X-Title": "BriefRadar",
   };
-  const base = {
-    model: OPENROUTER_MODEL(),
-    messages: [
-      { role: "system", content: system(input.length, input.country, input.language) },
-      { role: "user", content: userPrompt(input, "full") },
-    ],
-    // Room for the article (~1.4 tokens per word) plus some reasoning.
-    max_tokens: Math.round(input.length * 1.4 * 1.3) + 6000,
-    temperature: 0.6,
-  };
-  const url = "https://openrouter.ai/api/v1/chat/completions";
-  let wrote = false;
-  try {
-    for await (const ev of streamChat(url, headers, { ...base, reasoning: { effort: "low" } }, signal)) {
-      if (ev.t === "d") wrote = true;
-      yield ev;
-    }
-  } catch (e) {
-    // Never retry after text has been sent: that would produce two articles.
-    if (wrote) throw e;
-    const status = (e as { status?: number }).status;
-    // 400: the model rejected the reasoning hint. Other errors (busy provider, 5xx): retry once after a short pause.
-    // 429 (daily free quota used up) is not retried; the Groq backup takes over.
-    if (status === 400) {
-      yield* streamChat(url, headers, base, signal);
-    } else if (status !== 429 && status !== 401 && status !== 403 && !signal.aborted) {
-      yield { t: "status", msg: "Main writer was busy, trying again…" };
-      await new Promise((r) => setTimeout(r, 4000));
+  const messages = [
+    { role: "system", content: system(input.length, input.country, input.language) },
+    { role: "user", content: userPrompt(input, "full") },
+  ];
+  // Room for the article (~1.4 tokens per word) plus some reasoning.
+  const max_tokens = Math.round(input.length * 1.4 * 1.3) + 6000;
+
+  // One model: try with a low reasoning hint; if the model rejects that (400), try without it.
+  async function* one(model: string): AsyncGenerator<WriterEvent> {
+    const base = { model, messages, max_tokens, temperature: 0.6 };
+    try {
       yield* streamChat(url, headers, { ...base, reasoning: { effort: "low" } }, signal);
-    } else throw e;
+    } catch (e) {
+      if ((e as ModelError).status === 400) yield* streamChat(url, headers, base, signal);
+      else throw e;
+    }
   }
+
+  const models = [...new Set([OPENROUTER_MODEL(), ...OPENROUTER_FALLBACKS()])];
+  // Primary model gets a second try after a short pause; fallbacks get one try each.
+  const plan = [models[0], models[0], ...models.slice(1)];
+  let lastError: ModelError | null = null;
+
+  for (const [i, model] of plan.entries()) {
+    if (signal.aborted) break;
+    if (i === 1) {
+      yield { t: "status", msg: `${niceName(model)} was busy, trying again…` };
+      await new Promise((r) => setTimeout(r, 4000));
+    } else if (i > 1) {
+      yield { t: "status", msg: `${niceName(plan[i - 1])} is unavailable, trying ${niceName(model)}…` };
+      yield { t: "model", name: model, provider: "OpenRouter" };
+    }
+    let wrote = false;
+    try {
+      for await (const ev of one(model)) {
+        if (ev.t === "d") wrote = true;
+        yield ev;
+      }
+      return;
+    } catch (e) {
+      // Never retry after text has been sent: that would produce two articles.
+      if (wrote) throw e;
+      lastError = e as ModelError;
+      const status = lastError.status;
+      // Bad key, or the account's free daily quota is used up: other free models won't help.
+      if (status === 401 || status === 403 || status === 429) throw lastError;
+    }
+  }
+  throw lastError ?? new Error("The writer was stopped.");
 }
 
 async function* groq(input: WriteInput, signal: AbortSignal): AsyncGenerator<WriterEvent> {
