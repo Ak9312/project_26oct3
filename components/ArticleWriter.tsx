@@ -12,6 +12,7 @@ import type { Research, Source } from "@/lib/sources";
 
 const TYPES = ["Blog post", "Comparison", "How-to guide", "Landing page"];
 const LENGTHS = [1000, 1500, 2500];
+const LANGS = ["English", "Hindi"];
 type Phase = "idle" | "research" | "writing" | "done" | "error";
 type ResearchResponse = Research & { ticket: string; remaining?: number };
 
@@ -61,6 +62,7 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
   const [country, setCountry] = useState("in");
   const [contentType, setContentType] = useState("Blog post");
   const [length, setLength] = useState(1500);
+  const [language, setLanguage] = useState("English");
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
@@ -260,6 +262,7 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
           country,
           contentType,
           length,
+          language,
           ticket: r.ticket,
           questions: r.questions,
           relatedSearches: r.relatedSearches,
@@ -388,6 +391,9 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
           </Field>
           <Field id="alen" label="Length" value={String(length)} onChange={(v) => setLength(Number(v))}>
             {LENGTHS.map((l) => <option key={l} value={l}>~{l.toLocaleString()} words</option>)}
+          </Field>
+          <Field id="alang" label="Language" value={language} onChange={setLanguage}>
+            {LANGS.map((l) => <option key={l}>{l}</option>)}
           </Field>
           <Button type="submit" size="lg" disabled={busy || outOf || !!unavailable} className="min-h-13 flex-[0_1_auto] rounded-xl">
             <PenLine aria-hidden="true" />

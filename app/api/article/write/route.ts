@@ -1,6 +1,6 @@
 import { isAdminRequest, useTicket } from "@/lib/auth";
 import type { Source } from "@/lib/sources";
-import { writeArticle, type WriteInput } from "@/lib/writer";
+import { toLanguage, writeArticle, type WriteInput } from "@/lib/writer";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -38,6 +38,7 @@ export async function POST(req: Request) {
     questions: (Array.isArray(body.questions) ? body.questions : []).slice(0, 10).map((q: unknown) => str(q, 200)),
     relatedSearches: (Array.isArray(body.relatedSearches) ? body.relatedSearches : []).slice(0, 10).map((q: unknown) => str(q, 200)),
     sources: cleanSources(body.sources),
+    language: toLanguage(body.language),
   };
   if (!input.sources.some((s) => s.ok)) return Response.json({ error: "No readable sources were sent." }, { status: 400 });
 

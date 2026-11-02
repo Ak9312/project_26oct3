@@ -21,6 +21,7 @@ export interface Brief {
 
 const SYSTEM = `You are a senior SEO content strategist. You write briefs a writer can follow without further research.
 Rules:
+- Write every text field in English, even when the Google data is in another language. Keep proper names as they are.
 - Base questions and related keywords on the real Google data provided. You may rephrase or merge, but do not invent search volumes, difficulty scores or statistics.
 - Return ONLY a JSON object, no markdown fences, matching this TypeScript type:
 {"intent":"Informational"|"Commercial"|"Transactional"|"Navigational","intentReason":string,"h1":string,"outline":{"level":"H2"|"H3","text":string}[],"faqs":{"question":string,"answerHint":string}[],"relatedKeywords":string[],"suggestedWordCount":number}
