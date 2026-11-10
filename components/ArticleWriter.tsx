@@ -73,7 +73,6 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
   const [startedAt, setStartedAt] = useState(0);
   const [now, setNow] = useState(0);
   const [usage, setUsage] = useState<{ limit: number; remaining: number } | null>(null);
-  const [fixing, setFixing] = useState(false);
   const [fixed, setFixed] = useState(0);
   const [recent, setRecent] = useState<SavedArticle[]>([]);
   const [restored, setRestored] = useState<{ flagged: number; checked: number } | null>(null);
@@ -133,14 +132,14 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
 
   // Ask before closing or refreshing while an article is being written.
   useEffect(() => {
-    if (phase !== "research" && phase !== "writing" && !fixing) return;
+    if (phase !== "research" && phase !== "writing") return;
     const warn = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [phase, fixing]);
+  }, [phase]);
 
   async function toggleNotify() {
     if (!("Notification" in window)) return;
@@ -200,7 +199,6 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
     setModel(a.model);
     setTruncated(a.truncated);
     setFixed(a.fixed);
-    setFixing(false);
     setRestored({ flagged: a.flagged, checked: a.checked });
     setError("");
     setNote("");
@@ -221,7 +219,6 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
     setText("");
     setTruncated(false);
     setFixed(0);
-    setFixing(false);
     setRestored(null);
     setResearch(null);
     setModel("");
@@ -316,37 +313,10 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
       }
       setPhase("done");
 
-      // Automatically rewrite any sentence that is too close to a source, then re-check.
-      let finalText = got;
-      let fixedCount = 0;
-      const first = checkOriginality(got, r.sources.filter((s) => s.ok));
-      if (first.flagged.length > 0) {
-        setFixing(true);
-        try {
-          const sentences = first.flagged.slice(0, 15).map((f) => f.sentence);
-          const { rewrites } = await api<{ rewrites: string[] }>("/api/article/rewrite", {
-            method: "POST",
-            body: JSON.stringify({ keyword, ticket: r.ticket, sentences }),
-          });
-          let fixedText = got;
-          let n = 0;
-          sentences.forEach((s, i) => {
-            if (rewrites[i] && rewrites[i] !== s && fixedText.includes(s)) {
-              fixedText = fixedText.replace(s, rewrites[i]);
-              n++;
-            }
-          });
-          setText(fixedText);
-          setFixed(n);
-          finalText = fixedText;
-          fixedCount = n;
-        } catch {
-          /* keep the flags visible so they can be fixed by hand */
-        } finally {
-          setFixing(false);
-        }
-      }
-      remember(finalText, r, usedModel, wasTruncated, fixedCount);
+      // Sentences too close to a source are flagged below the article for the writer to fix.
+      // They are not rewritten automatically: a silent AI rewrite can change facts or meaning.
+      const finalText = got;
+      remember(finalText, r, usedModel, wasTruncated, 0);
       announce("Your article is ready", `"${keyword}" · ${finalText.split(/\s+/).filter(Boolean).length.toLocaleString()} words`);
     } catch (err) {
       if (ctrl.signal.aborted) return;
@@ -359,7 +329,7 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
 
   const okSources = research?.sources.filter((s) => s.ok) || [];
   const originality = useMemo(
-    () => (phase === "done" && text && !fixing && !restored ? checkOriginality(text, okSources) : null),
+    () => (phase === "done" && text && !restored ? checkOriginality(text, okSources) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [phase, text, research],
   );
@@ -436,7 +406,6 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
                   writing={phase === "writing"}
                   truncated={truncated}
                   originality={originality}
-                  fixing={fixing}
                   fixed={fixed}
                   restored={restored}
                 />
@@ -529,9 +498,9 @@ function splitMeta(md: string) {
   return { meta: m?.[1]?.trim() || "", body: m ? md.replace(m[0], "").replace(/\n{3,}/g, "\n\n") : md };
 }
 
-function ArticleView({ keyword, text, sources, writing, truncated, originality, fixing, fixed, restored }: {
+function ArticleView({ keyword, text, sources, writing, truncated, originality, fixed, restored }: {
   keyword: string; text: string; sources: Source[]; writing: boolean; truncated: boolean;
-  originality: ReturnType<typeof checkOriginality> | null; fixing: boolean; fixed: number;
+  originality: ReturnType<typeof checkOriginality> | null; fixed: number;
   restored: { flagged: number; checked: number } | null;
 }) {
   const [copied, setCopied] = useState(false);
@@ -560,8 +529,7 @@ function ArticleView({ keyword, text, sources, writing, truncated, originality, 
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 px-6 py-4 sm:px-8">
         <div className="flex flex-wrap items-center gap-2">
           {writing ? <Badge tone="brand"><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />Writing</Badge> : <Badge tone="success">Draft ready</Badge>}
-          {fixing && <Badge tone="brand"><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />Rewriting sentences too close to a source</Badge>}
-          {fixed > 0 && !fixing && <Badge>Rewrote {fixed} sentence{fixed === 1 ? "" : "s"} for originality</Badge>}
+          {fixed > 0 && <Badge>Rewrote {fixed} sentence{fixed === 1 ? "" : "s"} for originality</Badge>}
           {restored && (restored.flagged === 0
             ? <Badge tone="success"><ShieldCheck className="size-3" aria-hidden="true" />Original: no copied sentences</Badge>
             : <Badge tone="warning">{restored.flagged} sentence{restored.flagged === 1 ? "" : "s"} too close to a source</Badge>)}
@@ -569,7 +537,7 @@ function ArticleView({ keyword, text, sources, writing, truncated, originality, 
             ? <Badge tone="success"><ShieldCheck className="size-3" aria-hidden="true" />Original: no copied sentences</Badge>
             : <Badge tone="warning">{originality.flagged.length} sentence{originality.flagged.length === 1 ? "" : "s"} too close to a source</Badge>)}
         </div>
-        {!writing && !fixing && (
+        {!writing && (
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={copy}>{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{copied ? "Copied" : "Copy"}</Button>
             <Button variant="outline" size="sm" onClick={download}><Download aria-hidden="true" />Download .md</Button>
@@ -596,7 +564,7 @@ function ArticleView({ keyword, text, sources, writing, truncated, originality, 
 
       {originality && originality.flagged.length > 0 && (
         <div className="flex flex-col gap-2 border-t border-zinc-100 px-6 py-5 sm:px-8">
-          <h3 className="text-[15px] font-semibold">Rewrite these before publishing</h3>
+          <h3 className="text-[15px] font-semibold">Too close to a source: rewrite these in your own words before publishing</h3>
           <ul className="flex flex-col gap-2 text-sm">
             {originality.flagged.map((f, i) => (
               <li key={i} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
