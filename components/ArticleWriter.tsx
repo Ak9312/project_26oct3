@@ -10,8 +10,8 @@ import { checkOriginality } from "@/lib/originality";
 import { cn } from "@/lib/utils";
 import type { Research, Source } from "@/lib/sources";
 
-/** How long the writer may send nothing before the draft so far is kept as unfinished. */
-const STALL_MS = 90_000;
+/** How long the writer may send no new text before the draft so far is kept as unfinished. */
+const STALL_MS = 60_000;
 
 const TYPES = ["Blog post", "Comparison", "How-to guide", "Landing page"];
 const LENGTHS = [1000, 1500, 2500];
@@ -277,17 +277,22 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
       const decoder = new TextDecoder();
       let buf = "";
       let finished = false;
-      // If the model goes silent (free models sometimes stall mid-article), stop waiting after
-      // STALL_MS and keep the draft so far, marked as unfinished, instead of spinning forever.
+      // If the model stops producing text (free models sometimes stall mid-article while the
+      // server keeps the connection alive with pings), stop waiting after STALL_MS without new
+      // text and keep the draft so far, marked unfinished, instead of spinning forever.
+      let lastProgress = Date.now();
       while (true) {
         let stallTimer: ReturnType<typeof setTimeout> | undefined;
         const stalled = new Promise<"stalled">((resolve) => {
-          stallTimer = setTimeout(() => resolve("stalled"), STALL_MS);
+          stallTimer = setTimeout(() => resolve("stalled"), Math.max(0, STALL_MS - (Date.now() - lastProgress)));
         });
-        const next = await Promise.race([reader.read(), stalled]);
+        const read = reader.read();
+        read.catch(() => {}); // the pending read rejects once we cancel; that's expected
+        const next = await Promise.race([read, stalled]);
         clearTimeout(stallTimer);
         if (next === "stalled") {
           reader.cancel().catch(() => {});
+          ctrl.abort();
           break;
         }
         const { done, value } = next;
@@ -304,6 +309,7 @@ export default function ArticleWriter({ status }: { status: Status | null }) {
           } catch {
             continue;
           }
+          if (ev.t === "d" || ev.t === "thinking") lastProgress = Date.now();
           if (ev.t === "d") {
             got += ev.v;
             setText(got);
